@@ -22,6 +22,7 @@ The solution includes:
 
 ## Repository Structure
 
+```tree
 .
 ├── README.md
 ├── bash.sh
@@ -38,3 +39,4 @@ The solution includes:
         ├── variables.tf
         ├── versions.tf
         └── vpc.tf
+```
