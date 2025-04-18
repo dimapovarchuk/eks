@@ -1,0 +1,52 @@
+loki:
+  persistence:
+    enabled: true
+    size: 50Gi
+  replicas: 2
+
+mimir:
+  persistence:
+    enabled: true
+    size: 100Gi
+  replicas: 2
+
+tempo:
+  persistence:
+    enabled: true
+    size: 20Gi
+
+grafana:
+  persistence:
+    enabled: true
+    size: 10Gi
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Loki
+          type: loki
+          url: http://loki:3100
+          access: proxy
+        - name: Mimir
+          type: prometheus
+          url: http://mimir:9009
+          access: proxy
+        - name: Tempo
+          type: tempo
+          url: http://tempo:3200
+          access: proxy
+
+grafana-agent:
+  metrics:
+    enabled: true
+    remoteWrite:
+      - url: http://mimir:9009/api/v1/push
+
+fluent-bit:
+  config:
+    outputs:
+      - name: loki
+        match: "*"
+        type: loki
+        host: loki
+        port: 3100
