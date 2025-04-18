@@ -26,10 +26,10 @@ The solution includes:
 ├── README.md
 ├── bash.sh
 ├── diagram_aws.png
-└── project
-    ├── helm
+└── project/
+    ├── helm/
     │   └── values.yaml
-    └── terraform
+    └── terraform/
         ├── backend.tf
         ├── eks.tf
         ├── locals.tf
