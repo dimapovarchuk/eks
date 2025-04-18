@@ -21,3 +21,20 @@ The solution includes:
 - GitHub account with repository access
 
 ## Repository Structure
+
+.
+├── README.md
+├── bash.sh
+├── diagram_aws.png
+└── project
+    ├── helm
+    │   └── values.yaml
+    └── terraform
+        ├── backend.tf
+        ├── eks.tf
+        ├── locals.tf
+        ├── main.tf
+        ├── outputs.tf
+        ├── variables.tf
+        ├── versions.tf
+        └── vpc.tf
