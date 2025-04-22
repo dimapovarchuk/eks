@@ -2,58 +2,73 @@ loki:
   auth_enabled: false
   storage:
     type: filesystem
-    filesystem:
-      chunks_directory: /var/loki/chunks
-      rules_directory: /var/loki/rules
-    bucketNames:
-      chunks: chunks
-      ruler: ruler
-      admin: admin
   persistence:
     enabled: true
     size: 50Gi
-  replicas: 2
+    storageClassName: gp2
+    accessModes:
+      - ReadWriteOnce
+  replicas: 1  
   commonConfig:
+    path_prefix: /var/loki
     replication_factor: 1
     ring:
       kvstore:
         store: memberlist
+  schema_config:
+    configs:
+      - from: 2020-10-24
+        store: boltdb-shipper
+        object_store: filesystem
+        schema: v11
+        index:
+          prefix: index_
+          period: 24h
 
 mimir:
   persistence:
     enabled: true
     size: 100Gi
-  replicas: 2
+    storageClassName: gp2
+  replicas: 1  
   config:
     common:
       storage:
         backend: filesystem
+        filesystem:
+          dir: /var/mimir/chunks
 
 tempo:
   persistence:
     enabled: true
     size: 20Gi
+    storageClassName: gp2
   storage:
     trace:
       backend: local
       local:
         path: /var/tempo/traces
+  retention:
+    enabled: true
+    duration: 24h
 
 grafana:
   persistence:
     enabled: true
     size: 10Gi
+    storageClassName: gp2
+  adminPassword: admin  
   datasources:
     datasources.yaml:
       apiVersion: 1
       datasources:
         - name: Loki
           type: loki
-          url: http://loki:3100
+          url: http://loki-gateway/loki/api/v1/push
           access: proxy
         - name: Mimir
           type: prometheus
-          url: http://mimir:9009
+          url: http://mimir-nginx/prometheus
           access: proxy
         - name: Tempo
           type: tempo
@@ -61,16 +76,42 @@ grafana:
           access: proxy
 
 grafana-agent:
+  enabled: true
   metrics:
     enabled: true
     remoteWrite:
-      - url: http://mimir:9009/api/v1/push
+      - url: http://mimir-nginx/api/v1/push
+  logs:
+    enabled: true
+    clients:
+      - url: http://loki-gateway/loki/api/v1/push
 
 fluent-bit:
+  enabled: true
   config:
-    outputs:
-      - name: loki
-        match: "*"
-        type: loki
-        host: loki
-        port: 3100
+    service: |
+      [SERVICE]
+          Flush        1
+          Daemon       Off
+          Log_Level    info
+    inputs: |
+      [INPUT]
+          Name tail
+          Path /var/log/containers/*.log
+    filters: |
+      [FILTER]
+          Name kubernetes
+          Match kube.*
+          Merge_Log On
+          Keep_Log Off
+          K8S-Logging.Parser On
+          K8S-Logging.Exclude On
+    outputs: |
+      [OUTPUT]
+          Name loki
+          Match *
+          Host loki-gateway
+          Port 80
+          Labels job=fluentbit
+          Label_Keys $kubernetes['namespace_name'],$kubernetes['pod_name'],$kubernetes['container_name']
+          Line_Format json

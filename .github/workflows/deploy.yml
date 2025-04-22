@@ -75,39 +75,56 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
 
-      - name: Verify Helm
+      - name: Create Storage Class
         run: |
-          helm version
-          helm repo list
-          helm search repo grafana
-          echo "Helm verified"
+          kubectl apply -f - <<EOF
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: gp2
+          provisioner: kubernetes.io/aws-ebs
+          parameters:
+            type: gp2
+          reclaimPolicy: Retain
+          allowVolumeExpansion: true
+          volumeBindingMode: WaitForFirstConsumer
+          EOF
 
       - name: Deploy Monitoring Stack
         run: |
+          # Create namespace
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+          # Deploy components
           helm upgrade --install loki grafana/loki \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
           helm upgrade --install mimir grafana/mimir-distributed \
             --namespace ${{ env.NAMESPACE }} \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
           helm upgrade --install tempo grafana/tempo \
             --namespace ${{ env.NAMESPACE }} \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
           helm upgrade --install grafana grafana/grafana \
             --namespace ${{ env.NAMESPACE }} \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
           helm upgrade --install grafana-agent grafana/grafana-agent \
             --namespace ${{ env.NAMESPACE }} \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
           helm upgrade --install fluent-bit grafana/fluent-bit \
             --namespace ${{ env.NAMESPACE }} \
-            -f project/helm/values.yaml
+            --values project/helm/values.yaml \
+            --wait
 
       - name: Verify Deployment
         run: |
