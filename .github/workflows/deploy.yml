@@ -80,46 +80,66 @@ jobs:
           # Create namespace
           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-          # Deploy components
-          helm upgrade --install loki grafana/loki \
+          # Deploy Loki Stack
+          helm upgrade --install loki grafana/loki-stack \
             --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
+            --set grafana.enabled=false \
+            --set promtail.enabled=true \
+            --set loki.persistence.enabled=true \
+            --set loki.persistence.size=50Gi \
             --wait
 
+          # Deploy Mimir
           helm upgrade --install mimir grafana/mimir-distributed \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
             --wait
 
+          # Deploy Tempo
           helm upgrade --install tempo grafana/tempo \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
             --wait
 
+          # Deploy Grafana
           helm upgrade --install grafana grafana/grafana \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
+            --set adminPassword=admin \
             --wait
 
+          # Deploy Grafana Agent
           helm upgrade --install grafana-agent grafana/grafana-agent \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
             --wait
 
+          # Deploy Fluent Bit
           helm upgrade --install fluent-bit grafana/fluent-bit \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
             --wait
 
+      - name: Wait for Deployments
+        run: |
+          echo "Waiting for deployments to be ready..."
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=loki --timeout=300s
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=mimir --timeout=300s
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=tempo --timeout=300s
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=grafana --timeout=300s
+
       - name: Verify Deployment
         run: |
-          echo "Waiting for pods to be ready..."
-          kubectl wait --for=condition=ready pod --all -n ${{ env.NAMESPACE }} --timeout=300s
           echo "Checking deployments..."
           kubectl get pods -n ${{ env.NAMESPACE }}
           kubectl get svc -n ${{ env.NAMESPACE }}
           helm list -n ${{ env.NAMESPACE }}
           echo "Deployment verified"
+
+      - name: Get Grafana URL
+        run: |
+          echo "Grafana URL:"
+          kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 
       - name: Deployment Summary
         if: always()
@@ -129,11 +149,16 @@ jobs:
           echo "Cluster: ${{ env.CLUSTER_NAME }}"
           echo "Namespace: ${{ env.NAMESPACE }}"
           echo "Components Installed:"
-          echo "- Loki"
+          echo "- Loki Stack (with Promtail)"
           echo "- Mimir"
           echo "- Tempo"
-          echo "- Grafana"
+          echo "- Grafana (admin/admin)"
           echo "- Grafana Agent"
           echo "- Fluent Bit"
-          kubectl get nodes
+          echo ""
+          echo "Grafana Service:"
+          kubectl get svc -n ${{ env.NAMESPACE }} grafana
+          echo ""
+          echo "Pod Status:"
+          kubectl get pods -n ${{ env.NAMESPACE }}
           echo "======================="
