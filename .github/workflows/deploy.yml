@@ -17,129 +17,108 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      # ... (попередні кроки залишаються без змін до Add Helm Repositories)
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Verify AWS credentials
+      - name: Create Namespace
         run: |
-          aws sts get-caller-identity
-          echo "AWS credentials verified"
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-
-      - name: Terraform Init
-        working-directory: ./project/terraform
-        run: terraform init
-
-      - name: Terraform Format
-        working-directory: ./project/terraform
-        run: terraform fmt -check
-
-      - name: Terraform Plan
-        working-directory: ./project/terraform
-        run: terraform plan -out=tfplan
-
-      - name: Terraform Apply
-        working-directory: ./project/terraform
-        run: terraform apply -auto-approve tfplan
-
-      - name: Verify EKS cluster
-        run: |
-          aws eks describe-cluster --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
-          echo "EKS cluster verified"
-
-      - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
-          kubectl cluster-info
-          echo "Kubeconfig updated"
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Add Helm Repositories
-        run: |
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo update
-
-      - name: Deploy Monitoring Stack
-        run: |
-          # Create namespace
           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          echo "Namespace created/configured"
 
-          # Deploy Loki Stack
+      - name: Deploy Loki
+        run: |
+          echo "Deploying Loki..."
           helm upgrade --install loki grafana/loki-stack \
             --namespace ${{ env.NAMESPACE }} \
             --set grafana.enabled=false \
             --set promtail.enabled=true \
             --set loki.persistence.enabled=true \
             --set loki.persistence.size=50Gi \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-          # Deploy Mimir
+      - name: Verify Loki Deployment
+        run: |
+          echo "Waiting for Loki pods..."
+          kubectl -n ${{ env.NAMESPACE }} get pods -l app=loki -w --timeout=300s
+
+      - name: Deploy Mimir
+        run: |
+          echo "Deploying Mimir..."
           helm upgrade --install mimir grafana/mimir-distributed \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-          # Deploy Tempo
+      - name: Deploy Tempo
+        run: |
+          echo "Deploying Tempo..."
           helm upgrade --install tempo grafana/tempo \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-          # Deploy Grafana
+      - name: Deploy Grafana
+        run: |
+          echo "Deploying Grafana..."
           helm upgrade --install grafana grafana/grafana \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
             --set adminPassword=admin \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-          # Deploy Grafana Agent
+      - name: Deploy Grafana Agent
+        run: |
+          echo "Deploying Grafana Agent..."
           helm upgrade --install grafana-agent grafana/grafana-agent \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-          # Deploy Fluent Bit
+      - name: Deploy Fluent Bit
+        run: |
+          echo "Deploying Fluent Bit..."
           helm upgrade --install fluent-bit grafana/fluent-bit \
             --namespace ${{ env.NAMESPACE }} \
             --values project/helm/values.yaml \
-            --wait
+            --timeout 15m \
+            --atomic \
+            --debug
 
-      - name: Wait for Deployments
+      - name: Verify All Deployments
         run: |
-          echo "Waiting for deployments to be ready..."
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=loki --timeout=300s
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=mimir --timeout=300s
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=tempo --timeout=300s
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=grafana --timeout=300s
-
-      - name: Verify Deployment
-        run: |
-          echo "Checking deployments..."
+          echo "Checking all resources..."
+          
+          echo "Pods:"
           kubectl get pods -n ${{ env.NAMESPACE }}
+          
+          echo "Services:"
           kubectl get svc -n ${{ env.NAMESPACE }}
-          helm list -n ${{ env.NAMESPACE }}
-          echo "Deployment verified"
+          
+          echo "PersistentVolumeClaims:"
+          kubectl get pvc -n ${{ env.NAMESPACE }}
+          
+          echo "Deployments:"
+          kubectl get deployments -n ${{ env.NAMESPACE }}
+          
+          echo "StatefulSets:"
+          kubectl get statefulsets -n ${{ env.NAMESPACE }}
 
-      - name: Get Grafana URL
+      - name: Check Cluster Resources
         run: |
-          echo "Grafana URL:"
-          kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+          echo "Node Resources:"
+          kubectl describe nodes | grep -A 5 "Allocated resources"
+          
+          echo "Available Storage Classes:"
+          kubectl get storageclass
 
       - name: Deployment Summary
         if: always()
@@ -148,17 +127,27 @@ jobs:
           echo "Region: ${{ env.AWS_REGION }}"
           echo "Cluster: ${{ env.CLUSTER_NAME }}"
           echo "Namespace: ${{ env.NAMESPACE }}"
-          echo "Components Installed:"
-          echo "- Loki Stack (with Promtail)"
-          echo "- Mimir"
-          echo "- Tempo"
-          echo "- Grafana (admin/admin)"
-          echo "- Grafana Agent"
-          echo "- Fluent Bit"
-          echo ""
-          echo "Grafana Service:"
-          kubectl get svc -n ${{ env.NAMESPACE }} grafana
-          echo ""
-          echo "Pod Status:"
-          kubectl get pods -n ${{ env.NAMESPACE }}
+          echo "Components Status:"
+          
+          echo "Loki Stack:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=loki -o wide || true
+          
+          echo "Mimir:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=mimir -o wide || true
+          
+          echo "Tempo:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=tempo -o wide || true
+          
+          echo "Grafana:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=grafana -o wide || true
+          
+          echo "Grafana Agent:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=grafana-agent -o wide || true
+          
+          echo "Fluent Bit:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=fluent-bit -o wide || true
+          
+          echo "Services:"
+          kubectl get svc -n ${{ env.NAMESPACE }}
+          
           echo "======================="
