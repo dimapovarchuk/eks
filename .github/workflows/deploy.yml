@@ -77,10 +77,10 @@ jobs:
             --set loki.enabled=true \
             --set promtail.enabled=true \
             --set grafana.enabled=false \
-            --set loki.persistence.enabled=true \
-            --set loki.persistence.size=10Gi \
+            --set loki.persistence.enabled=false \
             --atomic \
-            --timeout 10m
+            --timeout 10m \
+            --force
 
       - name: Deploy Mimir
         if: success()
