@@ -1,19 +1,43 @@
 loki:
+  auth_enabled: false
+  storage:
+    type: filesystem
+    filesystem:
+      chunks_directory: /var/loki/chunks
+      rules_directory: /var/loki/rules
+    bucketNames:
+      chunks: chunks
+      ruler: ruler
+      admin: admin
   persistence:
     enabled: true
     size: 50Gi
   replicas: 2
+  commonConfig:
+    replication_factor: 1
+    ring:
+      kvstore:
+        store: memberlist
 
 mimir:
   persistence:
     enabled: true
     size: 100Gi
   replicas: 2
+  config:
+    common:
+      storage:
+        backend: filesystem
 
 tempo:
   persistence:
     enabled: true
     size: 20Gi
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
 
 grafana:
   persistence:

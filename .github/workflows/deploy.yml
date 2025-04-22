@@ -82,46 +82,31 @@ jobs:
           helm search repo grafana
           echo "Helm verified"
 
-      - name: Deploy Loki
+      - name: Deploy Monitoring Stack
         run: |
           helm upgrade --install loki grafana/loki \
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
             -f project/helm/values.yaml
 
-      - name: Deploy Mimir
-        run: |
           helm upgrade --install mimir grafana/mimir-distributed \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
             -f project/helm/values.yaml
 
-      - name: Deploy Tempo
-        run: |
           helm upgrade --install tempo grafana/tempo \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
             -f project/helm/values.yaml
 
-      - name: Deploy Grafana
-        run: |
           helm upgrade --install grafana grafana/grafana \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
             -f project/helm/values.yaml
 
-      - name: Deploy Grafana Agent
-        run: |
           helm upgrade --install grafana-agent grafana/grafana-agent \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
             -f project/helm/values.yaml
 
-      - name: Deploy Fluent Bit
-        run: |
           helm upgrade --install fluent-bit grafana/fluent-bit \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
             -f project/helm/values.yaml
 
       - name: Verify Deployment
