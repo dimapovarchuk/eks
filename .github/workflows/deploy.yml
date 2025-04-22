@@ -44,6 +44,17 @@ jobs:
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
           kubectl cluster-info
 
+      - name: Remove Node Taints
+        run: |
+          echo "Removing taints from nodes..."
+          for node in $(kubectl get nodes --no-headers -o custom-columns=":metadata.name"); do
+            kubectl taint nodes $node dedicated=monitoring:NoSchedule- || true
+            echo "Removed taint from node $node"
+          done
+          
+          echo "Verifying nodes status:"
+          kubectl describe nodes | grep Taints
+
       - name: Setup Helm
         uses: azure/setup-helm@v3
         with:
@@ -53,14 +64,6 @@ jobs:
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
-
-      - name: Check Storage Class
-        run: |
-          echo "Available Storage Classes:"
-          kubectl get storageclass
-          
-          echo "Default Storage Class:"
-          kubectl get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}'
 
       - name: Create Namespace
         run: |
@@ -76,22 +79,8 @@ jobs:
             --set grafana.enabled=false \
             --set loki.persistence.enabled=true \
             --set loki.persistence.size=10Gi \
-            --set loki.persistence.storageClassName=gp2 \
-            --set loki.config.storage.filesystem.chunks_directory=/var/loki/chunks \
-            --set loki.config.storage.filesystem.rules_directory=/var/loki/rules \
             --atomic \
             --timeout 10m
-
-      - name: Wait for Loki
-        run: |
-          echo "Waiting for Loki pods..."
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=loki --timeout=300s || true
-          
-          echo "Pod Status:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=loki
-          
-          echo "PVC Status:"
-          kubectl get pvc -n ${{ env.NAMESPACE }}
 
       - name: Deploy Mimir
         if: success()
@@ -126,33 +115,6 @@ jobs:
             --set adminPassword=admin \
             --atomic \
             --timeout 10m
-
-      - name: Configure Grafana Datasources
-        if: success()
-        run: |
-          kubectl apply -f - <<EOF
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: grafana-datasources
-            namespace: ${{ env.NAMESPACE }}
-          data:
-            datasources.yaml: |
-              apiVersion: 1
-              datasources:
-                - name: Loki
-                  type: loki
-                  url: http://loki:3100
-                  access: proxy
-                - name: Mimir
-                  type: prometheus
-                  url: http://mimir:9009
-                  access: proxy
-                - name: Tempo
-                  type: tempo
-                  url: http://tempo:3200
-                  access: proxy
-          EOF
 
       - name: Show Deployment Status
         if: always()
