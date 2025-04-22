@@ -69,27 +69,66 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Add Grafana Helm repo
-        run: helm repo add grafana https://grafana.github.io/helm-charts
-
-      - name: Update Helm repos
-        run: helm repo update
+      - name: Add Helm Repositories
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
 
       - name: Verify Helm
         run: |
           helm version
           helm repo list
+          helm search repo grafana
           echo "Helm verified"
 
-      - name: Deploy Grafana Stack
+      - name: Deploy Loki
         run: |
-          helm upgrade --install ${{ env.RELEASE_NAME }} grafana/grafana-enterprise-stack \
-            -f project/helm/values.yaml \
+          helm upgrade --install loki grafana/loki \
             --namespace ${{ env.NAMESPACE }} \
-            --create-namespace
+            --create-namespace \
+            -f project/helm/values.yaml
+
+      - name: Deploy Mimir
+        run: |
+          helm upgrade --install mimir grafana/mimir-distributed \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f project/helm/values.yaml
+
+      - name: Deploy Tempo
+        run: |
+          helm upgrade --install tempo grafana/tempo \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f project/helm/values.yaml
+
+      - name: Deploy Grafana
+        run: |
+          helm upgrade --install grafana grafana/grafana \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f project/helm/values.yaml
+
+      - name: Deploy Grafana Agent
+        run: |
+          helm upgrade --install grafana-agent grafana/grafana-agent \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f project/helm/values.yaml
+
+      - name: Deploy Fluent Bit
+        run: |
+          helm upgrade --install fluent-bit grafana/fluent-bit \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f project/helm/values.yaml
 
       - name: Verify Deployment
         run: |
+          echo "Waiting for pods to be ready..."
+          kubectl wait --for=condition=ready pod --all -n ${{ env.NAMESPACE }} --timeout=300s
+          echo "Checking deployments..."
           kubectl get pods -n ${{ env.NAMESPACE }}
           kubectl get svc -n ${{ env.NAMESPACE }}
           helm list -n ${{ env.NAMESPACE }}
@@ -102,6 +141,12 @@ jobs:
           echo "Region: ${{ env.AWS_REGION }}"
           echo "Cluster: ${{ env.CLUSTER_NAME }}"
           echo "Namespace: ${{ env.NAMESPACE }}"
-          echo "Release: ${{ env.RELEASE_NAME }}"
+          echo "Components Installed:"
+          echo "- Loki"
+          echo "- Mimir"
+          echo "- Tempo"
+          echo "- Grafana"
+          echo "- Grafana Agent"
+          echo "- Fluent Bit"
           kubectl get nodes
           echo "======================="
