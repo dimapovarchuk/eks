@@ -65,9 +65,27 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
 
-      - name: Create Namespace
+      - name: Reset Namespace
         run: |
-          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          echo "Deleting namespace if exists..."
+          kubectl delete namespace ${{ env.NAMESPACE }} --timeout=300s || true
+          
+          echo "Waiting for namespace deletion..."
+          while kubectl get namespace ${{ env.NAMESPACE }} 2>/dev/null; do
+            echo "Waiting for namespace to be deleted..."
+            sleep 5
+          done
+          
+          echo "Creating new namespace..."
+          kubectl create namespace ${{ env.NAMESPACE }}
+
+      - name: Cleanup Previous Helm Releases
+        run: |
+          echo "Cleaning up previous Helm releases..."
+          helm list -n ${{ env.NAMESPACE }} | grep -E 'loki|mimir|tempo|grafana' | awk '{print $1}' | xargs -r helm uninstall -n ${{ env.NAMESPACE }} || true
+          
+          echo "Waiting for cleanup..."
+          sleep 30
 
       - name: Deploy Loki Stack
         run: |
@@ -78,9 +96,15 @@ jobs:
             --set promtail.enabled=true \
             --set grafana.enabled=false \
             --set loki.persistence.enabled=false \
+            --set loki.replicas=1 \
             --atomic \
             --timeout 10m \
-            --force
+            --cleanup-on-fail
+
+      - name: Wait for Loki
+        run: |
+          echo "Waiting for Loki pods..."
+          kubectl wait --for=condition=ready pod -l app=loki -n ${{ env.NAMESPACE }} --timeout=300s || true
 
       - name: Deploy Mimir
         if: success()
@@ -91,7 +115,8 @@ jobs:
             --set persistence.enabled=true \
             --set persistence.size=10Gi \
             --atomic \
-            --timeout 10m
+            --timeout 10m \
+            --cleanup-on-fail
 
       - name: Deploy Tempo
         if: success()
@@ -102,7 +127,8 @@ jobs:
             --set persistence.enabled=true \
             --set persistence.size=10Gi \
             --atomic \
-            --timeout 10m
+            --timeout 10m \
+            --cleanup-on-fail
 
       - name: Deploy Grafana
         if: success()
@@ -114,7 +140,8 @@ jobs:
             --set persistence.size=10Gi \
             --set adminPassword=admin \
             --atomic \
-            --timeout 10m
+            --timeout 10m \
+            --cleanup-on-fail
 
       - name: Show Deployment Status
         if: always()
@@ -140,6 +167,9 @@ jobs:
           
           echo "Events:"
           kubectl get events -n ${{ env.NAMESPACE }}
+          
+          echo "Helm Releases:"
+          helm list -n ${{ env.NAMESPACE }}
           
           echo "Grafana URL:"
           kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
