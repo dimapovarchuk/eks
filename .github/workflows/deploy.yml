@@ -54,34 +54,132 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
 
+      - name: Check Storage Class
+        run: |
+          echo "Available Storage Classes:"
+          kubectl get storageclass
+          
+          echo "Default Storage Class:"
+          kubectl get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}'
+
       - name: Create Namespace
         run: |
           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy Loki
+      - name: Deploy Loki Stack
         run: |
-          echo "Installing Loki..."
-          helm upgrade --install loki grafana/loki \
+          echo "Installing Loki Stack..."
+          helm upgrade --install loki grafana/loki-stack \
             --namespace ${{ env.NAMESPACE }} \
-            --set singleBinary.enabled=true \
+            --set loki.enabled=true \
+            --set promtail.enabled=true \
+            --set grafana.enabled=false \
+            --set loki.persistence.enabled=true \
+            --set loki.persistence.size=10Gi \
+            --set loki.persistence.storageClassName=gp2 \
+            --set loki.config.storage.filesystem.chunks_directory=/var/loki/chunks \
+            --set loki.config.storage.filesystem.rules_directory=/var/loki/rules \
+            --atomic \
+            --timeout 10m
+
+      - name: Wait for Loki
+        run: |
+          echo "Waiting for Loki pods..."
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=ready pod -l app=loki --timeout=300s || true
+          
+          echo "Pod Status:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=loki
+          
+          echo "PVC Status:"
+          kubectl get pvc -n ${{ env.NAMESPACE }}
+
+      - name: Deploy Mimir
+        if: success()
+        run: |
+          echo "Installing Mimir..."
+          helm upgrade --install mimir grafana/mimir-distributed \
+            --namespace ${{ env.NAMESPACE }} \
             --set persistence.enabled=true \
             --set persistence.size=10Gi \
             --atomic \
             --timeout 10m
 
-      - name: Check Loki Status
+      - name: Deploy Tempo
+        if: success()
         run: |
-          echo "Waiting for Loki pods..."
-          kubectl -n ${{ env.NAMESPACE }} get pods -l app=loki -w
+          echo "Installing Tempo..."
+          helm upgrade --install tempo grafana/tempo \
+            --namespace ${{ env.NAMESPACE }} \
+            --set persistence.enabled=true \
+            --set persistence.size=10Gi \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy Grafana
+        if: success()
+        run: |
+          echo "Installing Grafana..."
+          helm upgrade --install grafana grafana/grafana \
+            --namespace ${{ env.NAMESPACE }} \
+            --set persistence.enabled=true \
+            --set persistence.size=10Gi \
+            --set adminPassword=admin \
+            --atomic \
+            --timeout 10m
+
+      - name: Configure Grafana Datasources
+        if: success()
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-datasources
+            namespace: ${{ env.NAMESPACE }}
+          data:
+            datasources.yaml: |
+              apiVersion: 1
+              datasources:
+                - name: Loki
+                  type: loki
+                  url: http://loki:3100
+                  access: proxy
+                - name: Mimir
+                  type: prometheus
+                  url: http://mimir:9009
+                  access: proxy
+                - name: Tempo
+                  type: tempo
+                  url: http://tempo:3200
+                  access: proxy
+          EOF
 
       - name: Show Deployment Status
         if: always()
         run: |
           echo "=== Deployment Status ==="
+          echo "Cluster Info:"
+          kubectl cluster-info
+          
+          echo "Nodes:"
+          kubectl get nodes
+          
+          echo "Storage Classes:"
+          kubectl get storageclass
+          
           echo "Pods:"
           kubectl get pods -n ${{ env.NAMESPACE }}
+          
           echo "Services:"
           kubectl get svc -n ${{ env.NAMESPACE }}
+          
           echo "PVCs:"
           kubectl get pvc -n ${{ env.NAMESPACE }}
+          
+          echo "Events:"
+          kubectl get events -n ${{ env.NAMESPACE }}
+          
+          echo "Grafana URL:"
+          kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+          
           echo "======================="
