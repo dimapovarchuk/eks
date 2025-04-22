@@ -1,60 +1,37 @@
-loki-stack:
-  loki:
+loki:
+  enabled: true
+  singleBinary:
     enabled: true
-    persistence:
-      enabled: true
-      size: 50Gi
-    config:
-      auth_enabled: false
-      server:
-        http_listen_port: 3100
-      ingester:
-        lifecycler:
-          ring:
-            kvstore:
-              store: inmemory
-            replication_factor: 1
-      schema_config:
-        configs:
-          - from: 2020-10-24
-            store: boltdb-shipper
-            object_store: filesystem
-            schema: v11
-            index:
-              prefix: index_
-              period: 24h
-      storage_config:
-        boltdb_shipper:
-          active_index_directory: /var/loki/index
-          cache_location: /var/loki/cache
-          shared_store: filesystem
-        filesystem:
-          directory: /var/loki/chunks
+    replicas: 1
+  persistence:
+    enabled: true
+    size: 10Gi
+  monitoring:
+    lokiCanary:
+      enabled: false
+    selfMonitoring:
+      enabled: false
+      grafanaAgent:
+        installOperator: false
+  test:
+    enabled: false
 
 mimir:
   persistence:
     enabled: true
-    size: 100Gi
-  replicas: 2
-  config:
-    common:
-      storage:
-        backend: filesystem
+    size: 10Gi
+  replicas: 1
 
 tempo:
   persistence:
     enabled: true
-    size: 20Gi
-  storage:
-    trace:
-      backend: local
-      local:
-        path: /var/tempo/traces
+    size: 10Gi
 
 grafana:
   persistence:
     enabled: true
     size: 10Gi
+  adminPassword: admin
   datasources:
     datasources.yaml:
       apiVersion: 1
@@ -73,16 +50,9 @@ grafana:
           access: proxy
 
 grafana-agent:
+  enabled: true
   metrics:
     enabled: true
-    remoteWrite:
-      - url: http://mimir:9009/api/v1/push
 
 fluent-bit:
-  config:
-    outputs:
-      - name: loki
-        match: "*"
-        type: loki
-        host: loki
-        port: 3100
+  enabled: true

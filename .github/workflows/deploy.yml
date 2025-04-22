@@ -11,143 +11,77 @@ env:
   TERRAFORM_VERSION: "1.5.0"
   HELM_VERSION: "v3.12.0"
   NAMESPACE: "monitoring"
-  RELEASE_NAME: "monitoring"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # ... (попередні кроки залишаються без змін до Add Helm Repositories)
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ./project/terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ./project/terraform
+        run: terraform apply -auto-approve
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+          kubectl cluster-info
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Helm Repositories
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
 
       - name: Create Namespace
         run: |
           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
-          echo "Namespace created/configured"
 
       - name: Deploy Loki
         run: |
-          echo "Deploying Loki..."
-          helm upgrade --install loki grafana/loki-stack \
+          echo "Installing Loki..."
+          helm upgrade --install loki grafana/loki \
             --namespace ${{ env.NAMESPACE }} \
-            --set grafana.enabled=false \
-            --set promtail.enabled=true \
-            --set loki.persistence.enabled=true \
-            --set loki.persistence.size=50Gi \
-            --timeout 15m \
+            --set singleBinary.enabled=true \
+            --set persistence.enabled=true \
+            --set persistence.size=10Gi \
             --atomic \
-            --debug
+            --timeout 10m
 
-      - name: Verify Loki Deployment
+      - name: Check Loki Status
         run: |
           echo "Waiting for Loki pods..."
-          kubectl -n ${{ env.NAMESPACE }} get pods -l app=loki -w --timeout=300s
+          kubectl -n ${{ env.NAMESPACE }} get pods -l app=loki -w
 
-      - name: Deploy Mimir
-        run: |
-          echo "Deploying Mimir..."
-          helm upgrade --install mimir grafana/mimir-distributed \
-            --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
-            --timeout 15m \
-            --atomic \
-            --debug
-
-      - name: Deploy Tempo
-        run: |
-          echo "Deploying Tempo..."
-          helm upgrade --install tempo grafana/tempo \
-            --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
-            --timeout 15m \
-            --atomic \
-            --debug
-
-      - name: Deploy Grafana
-        run: |
-          echo "Deploying Grafana..."
-          helm upgrade --install grafana grafana/grafana \
-            --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
-            --set adminPassword=admin \
-            --timeout 15m \
-            --atomic \
-            --debug
-
-      - name: Deploy Grafana Agent
-        run: |
-          echo "Deploying Grafana Agent..."
-          helm upgrade --install grafana-agent grafana/grafana-agent \
-            --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
-            --timeout 15m \
-            --atomic \
-            --debug
-
-      - name: Deploy Fluent Bit
-        run: |
-          echo "Deploying Fluent Bit..."
-          helm upgrade --install fluent-bit grafana/fluent-bit \
-            --namespace ${{ env.NAMESPACE }} \
-            --values project/helm/values.yaml \
-            --timeout 15m \
-            --atomic \
-            --debug
-
-      - name: Verify All Deployments
-        run: |
-          echo "Checking all resources..."
-          
-          echo "Pods:"
-          kubectl get pods -n ${{ env.NAMESPACE }}
-          
-          echo "Services:"
-          kubectl get svc -n ${{ env.NAMESPACE }}
-          
-          echo "PersistentVolumeClaims:"
-          kubectl get pvc -n ${{ env.NAMESPACE }}
-          
-          echo "Deployments:"
-          kubectl get deployments -n ${{ env.NAMESPACE }}
-          
-          echo "StatefulSets:"
-          kubectl get statefulsets -n ${{ env.NAMESPACE }}
-
-      - name: Check Cluster Resources
-        run: |
-          echo "Node Resources:"
-          kubectl describe nodes | grep -A 5 "Allocated resources"
-          
-          echo "Available Storage Classes:"
-          kubectl get storageclass
-
-      - name: Deployment Summary
+      - name: Show Deployment Status
         if: always()
         run: |
-          echo "=== Deployment Summary ==="
-          echo "Region: ${{ env.AWS_REGION }}"
-          echo "Cluster: ${{ env.CLUSTER_NAME }}"
-          echo "Namespace: ${{ env.NAMESPACE }}"
-          echo "Components Status:"
-          
-          echo "Loki Stack:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=loki -o wide || true
-          
-          echo "Mimir:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=mimir -o wide || true
-          
-          echo "Tempo:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=tempo -o wide || true
-          
-          echo "Grafana:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=grafana -o wide || true
-          
-          echo "Grafana Agent:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=grafana-agent -o wide || true
-          
-          echo "Fluent Bit:"
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=fluent-bit -o wide || true
-          
+          echo "=== Deployment Status ==="
+          echo "Pods:"
+          kubectl get pods -n ${{ env.NAMESPACE }}
           echo "Services:"
           kubectl get svc -n ${{ env.NAMESPACE }}
-          
+          echo "PVCs:"
+          kubectl get pvc -n ${{ env.NAMESPACE }}
           echo "======================="
