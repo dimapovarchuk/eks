@@ -75,21 +75,6 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
 
-      - name: Create Storage Class
-        run: |
-          kubectl apply -f - <<EOF
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: gp2
-          provisioner: kubernetes.io/aws-ebs
-          parameters:
-            type: gp2
-          reclaimPolicy: Retain
-          allowVolumeExpansion: true
-          volumeBindingMode: WaitForFirstConsumer
-          EOF
-
       - name: Deploy Monitoring Stack
         run: |
           # Create namespace
