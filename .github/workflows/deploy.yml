@@ -6,10 +6,15 @@ on:
     paths:
       - 'terraform/**'
       - 'helm/**'
+  workflow_dispatch:
 
 env:
   AWS_REGION: eu-central-1
   CLUSTER_NAME: monitoring-cluster
+  TERRAFORM_VERSION: "1.5.0"
+  HELM_VERSION: "v3.12.0"
+  NAMESPACE: "monitoring"
+  RELEASE_NAME: "monitoring"
 
 jobs:
   deploy:
@@ -25,14 +30,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify AWS credentials
+        run: |
+          aws sts get-caller-identity
+          echo "AWS credentials verified"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: 1.5.0
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Terraform Init
         working-directory: ./terraform
         run: terraform init
+
+      - name: Terraform Format
+        working-directory: ./terraform
+        run: terraform fmt -check
 
       - name: Terraform Plan
         working-directory: ./terraform
@@ -42,14 +56,21 @@ jobs:
         working-directory: ./terraform
         run: terraform apply -auto-approve tfplan
 
+      - name: Verify EKS cluster
+        run: |
+          aws eks describe-cluster --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          echo "EKS cluster verified"
+
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+          kubectl cluster-info
+          echo "Kubeconfig updated"
 
       - name: Setup Helm
         uses: azure/setup-helm@v3
         with:
-          version: 'v3.12.0'
+          version: ${{ env.HELM_VERSION }}
 
       - name: Add Grafana Helm repo
         run: helm repo add grafana https://grafana.github.io/helm-charts
@@ -57,9 +78,33 @@ jobs:
       - name: Update Helm repos
         run: helm repo update
 
+      - name: Verify Helm
+        run: |
+          helm version
+          helm repo list
+          echo "Helm verified"
+
       - name: Deploy Grafana Stack
         run: |
-          helm upgrade --install monitoring grafana/grafana-enterprise-stack \
+          helm upgrade --install ${{ env.RELEASE_NAME }} grafana/grafana-enterprise-stack \
             -f helm/values.yaml \
-            --namespace monitoring \
+            --namespace ${{ env.NAMESPACE }} \
             --create-namespace
+
+      - name: Verify Deployment
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }}
+          kubectl get svc -n ${{ env.NAMESPACE }}
+          helm list -n ${{ env.NAMESPACE }}
+          echo "Deployment verified"
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "=== Deployment Summary ==="
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Cluster: ${{ env.CLUSTER_NAME }}"
+          echo "Namespace: ${{ env.NAMESPACE }}"
+          echo "Release: ${{ env.RELEASE_NAME }}"
+          kubectl get nodes
+          echo "======================="
