@@ -44,22 +44,28 @@ jobs:
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
           kubectl cluster-info
 
-      - name: Check EBS CSI Driver
+      - name: Verify EBS CSI Driver
         run: |
-          echo "Checking EBS CSI Driver pods..."
+          echo "Checking EBS CSI Driver status..."
           kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver
           
-          echo "Checking StorageClass..."
-          kubectl get storageclass
+          echo "Checking if pods are ready..."
+          READY_PODS=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver -o jsonpath='{.items[*].status.containerStatuses[*].ready}' | tr ' ' '\n' | grep true | wc -l)
+          TOTAL_PODS=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver --no-headers | wc -l)
           
-          echo "Checking CSIDriver..."
-          kubectl get csidrivers
+          if [ "$READY_PODS" -eq "$TOTAL_PODS" ]; then
+            echo "EBS CSI Driver is ready"
+          else
+            echo "Warning: EBS CSI Driver is not fully ready"
+          fi
 
       - name: Check Node IAM Role
         run: |
           NODE_GROUP=$(aws eks list-nodegroups --cluster-name ${{ env.CLUSTER_NAME }} --query 'nodegroups[0]' --output text)
-          ROLE_NAME=$(aws eks describe-nodegroup --cluster-name ${{ env.CLUSTER_NAME }} --nodegroup-name $NODE_GROUP --query 'nodegroup.nodeRole' --output text)
-          echo "Node IAM Role: $ROLE_NAME"
+          ROLE_ARN=$(aws eks describe-nodegroup --cluster-name ${{ env.CLUSTER_NAME }} --nodegroup-name $NODE_GROUP --query 'nodegroup.nodeRole' --output text)
+          ROLE_NAME=$(echo $ROLE_ARN | cut -d'/' -f2)
+          echo "Node IAM Role ARN: $ROLE_ARN"
+          echo "Node IAM Role Name: $ROLE_NAME"
           aws iam get-role --role-name $ROLE_NAME
 
       - name: Remove Node Taints
@@ -144,6 +150,7 @@ jobs:
             --set persistence.enabled=false \
             --set adminPassword=admin \
             --set service.type=LoadBalancer \
+            --set service.annotations."service\\.beta\\.kubernetes\\.io/aws-load-balancer-type"="nlb" \
             --set resources.requests.cpu=100m \
             --set resources.requests.memory=128Mi \
             --set resources.limits.cpu=200m \
@@ -167,8 +174,12 @@ jobs:
           kubectl rollout status deployment/grafana -n ${{ env.NAMESPACE }} --timeout=300s
           
           echo "Waiting for Grafana service..."
-          until kubectl get svc grafana -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null; do
-            echo "Waiting for LoadBalancer..."
+          for i in $(seq 1 30); do
+            if kubectl get svc grafana -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null; then
+              echo "LoadBalancer is ready"
+              break
+            fi
+            echo "Waiting for LoadBalancer... ($i/30)"
             sleep 10
           done
 
@@ -198,7 +209,8 @@ jobs:
           helm list -n ${{ env.NAMESPACE }}
           
           echo "Grafana URL:"
-          kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+          GRAFANA_URL=$(kubectl get svc grafana -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "http://$GRAFANA_URL"
           echo ""
           echo "Grafana Credentials:"
           echo "Username: admin"
