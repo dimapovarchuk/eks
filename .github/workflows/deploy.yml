@@ -116,7 +116,26 @@ jobs:
             --set persistence.size=10Gi \
             --atomic \
             --timeout 10m \
+            --cleanup-on-fail      - name: Deploy Mimir
+        if: success()
+        run: |
+          echo "Installing Mimir..."
+          helm upgrade --install mimir grafana/mimir-distributed \
+            --namespace ${{ env.NAMESPACE }} \
+            --set persistence.enabled=false \
+            --set minio.enabled=false \
+            --set alertmanager.enabled=false \
+            --set ruler.enabled=false \
+            --set store_gateway.enabled=false \
+            --set compactor.enabled=false \
+            --set distributor.replicas=1 \
+            --set ingester.replicas=1 \
+            --set querier.replicas=1 \
+            --set query_frontend.replicas=1 \
+            --atomic \
+            --timeout 10m \
             --cleanup-on-fail
+
 
       - name: Deploy Tempo
         if: success()
