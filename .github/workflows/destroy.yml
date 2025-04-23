@@ -1,0 +1,84 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.destroy'
+
+env:
+  AWS_REGION: eu-central-1
+  CLUSTER_NAME: monitoring-cluster
+  TERRAFORM_VERSION: "1.5.0"
+  NAMESPACE: "monitoring"
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+          kubectl cluster-info
+
+      - name: Remove Helm Releases
+        run: |
+          echo "Removing Helm releases..."
+          helm uninstall grafana -n ${{ env.NAMESPACE }} || true
+          helm uninstall prometheus -n ${{ env.NAMESPACE }} || true
+          helm uninstall loki -n ${{ env.NAMESPACE }} || true
+          helm uninstall tempo -n ${{ env.NAMESPACE }} || true
+          
+          echo "Waiting for releases to be removed..."
+          sleep 30
+
+      - name: Delete Namespace
+        run: |
+          echo "Deleting namespace..."
+          kubectl delete namespace ${{ env.NAMESPACE }} --timeout=300s || true
+          
+          echo "Waiting for namespace deletion..."
+          while kubectl get namespace ${{ env.NAMESPACE }} 2>/dev/null; do
+            echo "Waiting for namespace to be deleted..."
+            sleep 5
+          done
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ./project/terraform
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: ./project/terraform
+        run: terraform destroy -auto-approve
+
+      - name: Verification
+        if: always()
+        run: |
+          echo "=== Destruction Verification ==="
+          echo "Checking for EKS cluster..."
+          aws eks describe-cluster --name ${{ env.CLUSTER_NAME }} || echo "Cluster not found (good)"
+          
+          echo "Checking for namespaces..."
+          kubectl get namespaces || echo "Cannot connect to cluster (good)"
+          
+          echo "Checking for AWS resources..."
+          echo "VPCs tagged with cluster name:"
+          aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*${{ env.CLUSTER_NAME }}*" || echo "No VPCs found (good)"
+          
+          echo "======================="
