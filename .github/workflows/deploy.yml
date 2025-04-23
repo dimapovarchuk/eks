@@ -63,6 +63,7 @@ jobs:
       - name: Add Helm Repositories
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
 
       - name: Reset Namespace
@@ -82,7 +83,7 @@ jobs:
       - name: Cleanup Previous Helm Releases
         run: |
           echo "Cleaning up previous Helm releases..."
-          helm list -n ${{ env.NAMESPACE }} | grep -E 'loki|mimir|tempo|grafana' | awk '{print $1}' | xargs -r helm uninstall -n ${{ env.NAMESPACE }} || true
+          helm list -n ${{ env.NAMESPACE }} | grep -E 'loki|prometheus|tempo|grafana' | awk '{print $1}' | xargs -r helm uninstall -n ${{ env.NAMESPACE }} || true
           
           echo "Waiting for cleanup..."
           sleep 30
@@ -106,36 +107,17 @@ jobs:
           echo "Waiting for Loki pods..."
           kubectl wait --for=condition=ready pod -l app=loki -n ${{ env.NAMESPACE }} --timeout=300s || true
 
-      - name: Deploy Mimir
+      - name: Deploy Prometheus
         if: success()
         run: |
-          echo "Installing Mimir..."
-          helm upgrade --install mimir grafana/mimir-distributed \
+          echo "Installing Prometheus..."
+          helm upgrade --install prometheus prometheus-community/prometheus \
             --namespace ${{ env.NAMESPACE }} \
-            --set persistence.enabled=true \
-            --set persistence.size=10Gi \
-            --atomic \
-            --timeout 10m \
-            --cleanup-on-fail      - name: Deploy Mimir
-        if: success()
-        run: |
-          echo "Installing Mimir..."
-          helm upgrade --install mimir grafana/mimir-distributed \
-            --namespace ${{ env.NAMESPACE }} \
-            --set persistence.enabled=false \
-            --set minio.enabled=false \
+            --set server.persistentVolume.enabled=false \
             --set alertmanager.enabled=false \
-            --set ruler.enabled=false \
-            --set store_gateway.enabled=false \
-            --set compactor.enabled=false \
-            --set distributor.replicas=1 \
-            --set ingester.replicas=1 \
-            --set querier.replicas=1 \
-            --set query_frontend.replicas=1 \
             --atomic \
             --timeout 10m \
             --cleanup-on-fail
-
 
       - name: Deploy Tempo
         if: success()
@@ -143,8 +125,7 @@ jobs:
           echo "Installing Tempo..."
           helm upgrade --install tempo grafana/tempo \
             --namespace ${{ env.NAMESPACE }} \
-            --set persistence.enabled=true \
-            --set persistence.size=10Gi \
+            --set persistence.enabled=false \
             --atomic \
             --timeout 10m \
             --cleanup-on-fail
@@ -158,6 +139,16 @@ jobs:
             --set persistence.enabled=true \
             --set persistence.size=10Gi \
             --set adminPassword=admin \
+            --set service.type=LoadBalancer \
+            --set datasources."datasources\\.yaml".apiVersion=1 \
+            --set datasources."datasources\\.yaml".datasources[0].name=Prometheus \
+            --set datasources."datasources\\.yaml".datasources[0].type=prometheus \
+            --set datasources."datasources\\.yaml".datasources[0].url=http://prometheus-server \
+            --set datasources."datasources\\.yaml".datasources[0].access=proxy \
+            --set datasources."datasources\\.yaml".datasources[1].name=Loki \
+            --set datasources."datasources\\.yaml".datasources[1].type=loki \
+            --set datasources."datasources\\.yaml".datasources[1].url=http://loki:3100 \
+            --set datasources."datasources\\.yaml".datasources[1].access=proxy \
             --atomic \
             --timeout 10m \
             --cleanup-on-fail
