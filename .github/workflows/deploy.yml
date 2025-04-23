@@ -44,6 +44,24 @@ jobs:
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
           kubectl cluster-info
 
+      - name: Check EBS CSI Driver
+        run: |
+          echo "Checking EBS CSI Driver pods..."
+          kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver
+          
+          echo "Checking StorageClass..."
+          kubectl get storageclass
+          
+          echo "Checking CSIDriver..."
+          kubectl get csidrivers
+
+      - name: Check Node IAM Role
+        run: |
+          NODE_GROUP=$(aws eks list-nodegroups --cluster-name ${{ env.CLUSTER_NAME }} --query 'nodegroups[0]' --output text)
+          ROLE_NAME=$(aws eks describe-nodegroup --cluster-name ${{ env.CLUSTER_NAME }} --nodegroup-name $NODE_GROUP --query 'nodegroup.nodeRole' --output text)
+          echo "Node IAM Role: $ROLE_NAME"
+          aws iam get-role --role-name $ROLE_NAME
+
       - name: Remove Node Taints
         run: |
           echo "Removing taints from nodes..."
@@ -80,14 +98,6 @@ jobs:
           echo "Creating new namespace..."
           kubectl create namespace ${{ env.NAMESPACE }}
 
-      - name: Cleanup Previous Helm Releases
-        run: |
-          echo "Cleaning up previous Helm releases..."
-          helm list -n ${{ env.NAMESPACE }} | grep -E 'loki|prometheus|tempo|grafana' | awk '{print $1}' | xargs -r helm uninstall -n ${{ env.NAMESPACE }} || true
-          
-          echo "Waiting for cleanup..."
-          sleep 30
-
       - name: Deploy Loki Stack
         run: |
           echo "Installing Loki Stack..."
@@ -101,11 +111,6 @@ jobs:
             --atomic \
             --timeout 10m \
             --cleanup-on-fail
-
-      - name: Wait for Loki
-        run: |
-          echo "Waiting for Loki pods..."
-          kubectl wait --for=condition=ready pod -l app=loki -n ${{ env.NAMESPACE }} --timeout=300s || true
 
       - name: Deploy Prometheus
         if: success()
@@ -136,10 +141,13 @@ jobs:
           echo "Installing Grafana..."
           helm upgrade --install grafana grafana/grafana \
             --namespace ${{ env.NAMESPACE }} \
-            --set persistence.enabled=true \
-            --set persistence.size=10Gi \
+            --set persistence.enabled=false \
             --set adminPassword=admin \
             --set service.type=LoadBalancer \
+            --set resources.requests.cpu=100m \
+            --set resources.requests.memory=128Mi \
+            --set resources.limits.cpu=200m \
+            --set resources.limits.memory=256Mi \
             --set datasources."datasources\\.yaml".apiVersion=1 \
             --set datasources."datasources\\.yaml".datasources[0].name=Prometheus \
             --set datasources."datasources\\.yaml".datasources[0].type=prometheus \
@@ -150,8 +158,19 @@ jobs:
             --set datasources."datasources\\.yaml".datasources[1].url=http://loki:3100 \
             --set datasources."datasources\\.yaml".datasources[1].access=proxy \
             --atomic \
-            --timeout 10m \
+            --timeout 5m \
             --cleanup-on-fail
+
+      - name: Wait for Grafana
+        run: |
+          echo "Waiting for Grafana deployment..."
+          kubectl rollout status deployment/grafana -n ${{ env.NAMESPACE }} --timeout=300s
+          
+          echo "Waiting for Grafana service..."
+          until kubectl get svc grafana -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null; do
+            echo "Waiting for LoadBalancer..."
+            sleep 10
+          done
 
       - name: Show Deployment Status
         if: always()
@@ -172,9 +191,6 @@ jobs:
           echo "Services:"
           kubectl get svc -n ${{ env.NAMESPACE }}
           
-          echo "PVCs:"
-          kubectl get pvc -n ${{ env.NAMESPACE }}
-          
           echo "Events:"
           kubectl get events -n ${{ env.NAMESPACE }}
           
@@ -183,5 +199,9 @@ jobs:
           
           echo "Grafana URL:"
           kubectl get svc -n ${{ env.NAMESPACE }} grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+          echo ""
+          echo "Grafana Credentials:"
+          echo "Username: admin"
+          echo "Password: admin"
           
           echo "======================="
